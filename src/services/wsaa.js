@@ -9,13 +9,44 @@ const WSAA_URL = process.env.AFIP_PROD === 'true'
   ? 'https://wsaa.afip.gov.ar/ws/services/LoginCms'
   : 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms'
 
-const CERT_PATH  = 'C:\\canyfeliz-certs\\canyfeliz_arca.crt'
-const KEY_PATH   = 'C:\\canyfeliz-certs\\canyfeliz.key'
 const TOKEN_FILE = path.join(os.tmpdir(), 'canyfeliz_token.json')
 
 let tokenCache = null
 
-// Cargar token guardado al iniciar — sobrevive reinicios del backend
+// -------------------------
+// Certificados (Railway + Local)
+// -------------------------
+function getCertPaths() {
+  const tmpDir = os.tmpdir()
+
+  // 🔥 PRODUCCIÓN (Railway)
+  if (process.env.AFIP_CERT_B64 && process.env.AFIP_KEY_B64) {
+    const certPath = path.join(tmpDir, 'afip.crt')
+    const keyPath  = path.join(tmpDir, 'afip.key')
+
+    fs.writeFileSync(
+      certPath,
+      Buffer.from(process.env.AFIP_CERT_B64, 'base64')
+    )
+
+    fs.writeFileSync(
+      keyPath,
+      Buffer.from(process.env.AFIP_KEY_B64, 'base64')
+    )
+
+    return { certPath, keyPath }
+  }
+
+  // 🧑‍💻 LOCAL (tu PC)
+  return {
+    certPath: 'C:\\canyfeliz-certs\\canyfeliz.crt',
+    keyPath:  'C:\\canyfeliz-certs\\canyfeliz.key',
+  }
+}
+
+// -------------------------
+// Token persistente
+// -------------------------
 function cargarTokenGuardado() {
   try {
     if (fs.existsSync(TOKEN_FILE)) {
@@ -30,13 +61,15 @@ function cargarTokenGuardado() {
 
 cargarTokenGuardado()
 
+// -------------------------
+// TRA
+// -------------------------
 function generarTRA() {
   const ahora = new Date()
   const desde = new Date(ahora.getTime() - 60000)
   const hasta = new Date(ahora.getTime() + 43200000)
 
   const fmt = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z')
-
   const uniqueId = Math.floor(Date.now() / 1000).toString()
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -50,21 +83,21 @@ function generarTRA() {
 </loginTicketRequest>`
 }
 
+// -------------------------
+// Firmar TRA
+// -------------------------
 function firmarTRA(tra) {
+  const { certPath, keyPath } = getCertPaths()
+
   const tmpDir  = os.tmpdir()
   const traPath = path.join(tmpDir, 'tra_canyfeliz.xml')
   const cmsPath = path.join(tmpDir, 'tra_canyfeliz.cms')
-
-  console.log('CERT_PATH:', CERT_PATH)
-  console.log('KEY_PATH:', KEY_PATH)
-  console.log('Existe CRT:', fs.existsSync(CERT_PATH))
-  console.log('Existe KEY:', fs.existsSync(KEY_PATH))
 
   fs.writeFileSync(traPath, tra, 'utf8')
 
   execSync(
     `openssl smime -sign -in "${traPath}" -out "${cmsPath}" ` +
-    `-signer "${CERT_PATH}" -inkey "${KEY_PATH}" ` +
+    `-signer "${certPath}" -inkey "${keyPath}" ` +
     `-nodetach -outform PEM`
   )
 
@@ -80,8 +113,10 @@ function firmarTRA(tra) {
     .trim()
 }
 
+// -------------------------
+// Obtener Token AFIP
+// -------------------------
 async function obtenerToken() {
-  // Si hay token en memoria o en archivo y no expiró, usarlo
   if (tokenCache && new Date() < new Date(tokenCache.expira)) {
     console.log('Usando token en caché')
     return tokenCache
@@ -114,9 +149,8 @@ async function obtenerToken() {
     console.log('WSAA error status:', axiosErr.response?.status)
     console.log('WSAA error data:', errorData)
 
-    // Token ya vigente en AFIP — esperar 2 min y reintentar
     if (errorData.includes('alreadyAuthenticated')) {
-      console.log('Token ya vigente en AFIP, esperando 2 minutos para reintentar...')
+      console.log('Token ya vigente en AFIP, esperando 2 minutos...')
       await new Promise(r => setTimeout(r, 120000))
       return obtenerToken()
     }
@@ -145,7 +179,6 @@ async function obtenerToken() {
     expira: ticketParsed.loginTicketResponse.header.expirationTime,
   }
 
-  // Guardar en archivo para sobrevivir reinicios
   try {
     fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokenCache), 'utf8')
     console.log('Token guardado en archivo, expira:', tokenCache.expira)

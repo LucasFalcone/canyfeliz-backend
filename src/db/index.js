@@ -12,9 +12,8 @@ const pool = new Pool({
   },
 })
 
-pool.on('error', (err) => {
-  console.error('Error inesperado en el pool de BD:', err)
-  process.exit(-1)
-})
+pool.query('SELECT NOW()')
+  .then(() => console.log('✅ Conectado a PostgreSQL'))
+  .catch(err => console.error('❌ Error PostgreSQL:', err));
 
 module.exports = pool
