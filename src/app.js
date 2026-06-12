@@ -20,35 +20,29 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('PORT:', process.env.PORT);
 console.log('FRONTEND_URL:', process.env.FRONTEND_URL);
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'CONFIGURADA' : 'NO CONFIGURADA');
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
-console.log('ALLOWED ORIGINS:', allowedOrigins);
-
-app.use(cors({
-  origin: (origin, callback) => {
-    console.log('ORIGIN:', origin);
-
-    if (!origin || allowedOrigins.includes(origin)) {
-      console.log('CORS OK');
-      callback(null, true);
-    } else {
-      console.log('CORS BLOQUEADO');
-      callback(new Error('CORS no permitido'));
-    }
-  },
-  credentials: true,
-}));
-
+app.use(cors());
 app.use(express.json());
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// app.js — rutas SIN /api (el proxy ya lo saca)
+// Health checks
+app.get('/', (req, res) => {
+  console.log('GET /');
+  res.status(200).json({
+    status: 'CanyFeliz API corriendo 🐾'
+  });
+});
+
+app.get('/ping', (req, res) => {
+  console.log('GET /ping');
+  res.status(200).send('pong');
+});
+
+// Rutas
 app.use('/productos', productosRoutes);
 app.use('/ventas', ventasRoutes);
 app.use('/auth', authRoutes);
@@ -59,18 +53,14 @@ app.use('/clientes', clientesRoutes);
 app.use('/promociones', promocionesRoutes);
 app.use('/notas-credito', notasCreditoRoutes);
 
-// Health check
-app.get('/', (req, res) => res.json({ status: 'CanyFeliz API corriendo 🐾' }));
-
-// Manejo global de errores
+// Error handler
 app.use((err, req, res, next) => {
   console.error('ERROR:', err);
-  res.status(500).json({ error: 'Error interno del servidor' });
+  res.status(500).json({
+    error: err.message || 'Error interno del servidor'
+  });
 });
 
-console.log('ENV TEST:', process.env.DB_HOST);
-console.log('ENV TEST URL:', process.env.DATABASE_URL);
-
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor en http://localhost:${PORT}`);
+  console.log(`Servidor escuchando en puerto ${PORT}`);
 });
