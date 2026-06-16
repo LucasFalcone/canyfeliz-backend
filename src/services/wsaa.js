@@ -1,9 +1,9 @@
-const fs           = require('fs')
-const path         = require('path')
-const axios        = require('axios')
-const xml2js       = require('xml2js')
+const fs = require('fs')
+const path = require('path')
+const axios = require('axios')
+const xml2js = require('xml2js')
 const { execSync } = require('child_process')
-const os           = require('os')
+const os = require('os')
 
 const WSAA_URL = process.env.AFIP_PROD === 'true'
   ? 'https://wsaa.afip.gov.ar/ws/services/LoginCms'
@@ -17,30 +17,38 @@ let tokenCache = null
 // Certificados (Railway + Local)
 // -------------------------
 function getCertPaths() {
+  console.log('AFIP_CERT_B64 existe:', !!process.env.AFIP_CERT_B64)
+  console.log('AFIP_KEY_B64 existe:', !!process.env.AFIP_KEY_B64)
+
   const tmpDir = os.tmpdir()
 
   // 🔥 PRODUCCIÓN (Railway)
   if (process.env.AFIP_CERT_B64 && process.env.AFIP_KEY_B64) {
     const certPath = path.join(tmpDir, 'afip.crt')
-    const keyPath  = path.join(tmpDir, 'afip.key')
+    const keyPath = path.join(tmpDir, 'afip.key')
 
-    fs.writeFileSync(
-      certPath,
-      Buffer.from(process.env.AFIP_CERT_B64, 'base64')
-    )
+    // ✅ CERT decode seguro
+    const certPem = Buffer
+      .from(process.env.AFIP_CERT_B64, 'base64')
+      .toString('utf8')
+      .trim()
 
-    fs.writeFileSync(
-      keyPath,
-      Buffer.from(process.env.AFIP_KEY_B64, 'base64')
-    )
+    // ✅ KEY decode seguro (FIX REAL DEL ERROR)
+    const keyPem = Buffer
+      .from(process.env.AFIP_KEY_B64, 'base64')
+      .toString('utf8')
+      .trim()
+
+    fs.writeFileSync(certPath, certPem)
+    fs.writeFileSync(keyPath, keyPem)
 
     return { certPath, keyPath }
   }
 
-  // 🧑‍💻 LOCAL (tu PC)
+  // 🧑‍💻 LOCAL
   return {
     certPath: 'C:\\canyfeliz-certs\\canyfeliz.crt',
-    keyPath:  'C:\\canyfeliz-certs\\canyfeliz.key',
+    keyPath: 'C:\\canyfeliz-certs\\canyfeliz.key',
   }
 }
 
@@ -56,7 +64,7 @@ function cargarTokenGuardado() {
         console.log('Token cargado desde archivo, expira:', data.expira)
       }
     }
-  } catch {}
+  } catch { }
 }
 
 cargarTokenGuardado()
@@ -89,7 +97,7 @@ function generarTRA() {
 function firmarTRA(tra) {
   const { certPath, keyPath } = getCertPaths()
 
-  const tmpDir  = os.tmpdir()
+  const tmpDir = os.tmpdir()
   const traPath = path.join(tmpDir, 'tra_canyfeliz.xml')
   const cmsPath = path.join(tmpDir, 'tra_canyfeliz.cms')
 
@@ -103,8 +111,8 @@ function firmarTRA(tra) {
 
   const cms = fs.readFileSync(cmsPath, 'utf8')
 
-  try { fs.unlinkSync(traPath) } catch {}
-  try { fs.unlinkSync(cmsPath) } catch {}
+  try { fs.unlinkSync(traPath) } catch { }
+  try { fs.unlinkSync(cmsPath) } catch { }
 
   return cms
     .replace('-----BEGIN PKCS7-----', '')
@@ -122,7 +130,7 @@ async function obtenerToken() {
     return tokenCache
   }
 
-  const tra        = generarTRA()
+  const tra = generarTRA()
   const cmsFirmado = firmarTRA(tra)
 
   const soapEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
@@ -141,7 +149,7 @@ async function obtenerToken() {
     response = await axios.post(WSAA_URL, soapEnvelope, {
       headers: {
         'Content-Type': 'text/xml;charset=UTF-8',
-        'SOAPAction':   'loginCms',
+        'SOAPAction': 'loginCms',
       },
     })
   } catch (axiosErr) {
@@ -165,7 +173,7 @@ async function obtenerToken() {
   })
 
   const loginTicket = parsed['soapenv:Envelope']['soapenv:Body']
-    ['loginCmsResponse']['loginCmsReturn']
+  ['loginCmsResponse']['loginCmsReturn']
 
   const ticketParsed = await xml2js.parseStringPromise(loginTicket, {
     explicitArray: false,
@@ -174,15 +182,15 @@ async function obtenerToken() {
   const credentials = ticketParsed.loginTicketResponse.credentials
 
   tokenCache = {
-    token:  credentials.token,
-    sign:   credentials.sign,
+    token: credentials.token,
+    sign: credentials.sign,
     expira: ticketParsed.loginTicketResponse.header.expirationTime,
   }
 
   try {
     fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokenCache), 'utf8')
     console.log('Token guardado en archivo, expira:', tokenCache.expira)
-  } catch {}
+  } catch { }
 
   return tokenCache
 }
