@@ -10,6 +10,7 @@ const getStock = async (req, res) => {
         p.nombre,
         p.precio,
         p.codigo,
+        p.categoria,
         p.stock,
         MIN(l.fecha_venc)
           FILTER (
@@ -126,10 +127,11 @@ const getAlertas = async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT
-        p.id,
-        p.nombre,
-        p.codigo,
-        p.stock,
+  p.id,
+  p.nombre,
+  p.codigo,
+  p.categoria,
+  p.stock,
         MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0) AS proximo_venc,
         SUM(
           CASE
@@ -151,7 +153,7 @@ const getAlertas = async (req, res) => {
        LEFT JOIN lotes l
          ON l.producto_id = p.id
        WHERE p.veterinaria = $2
-       GROUP BY p.id, p.nombre, p.codigo, p.stock
+       GROUP BY p.id, p.nombre, p.codigo, p.categoria, p.stock
        HAVING
          p.stock = 0
          OR MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0)
@@ -179,8 +181,7 @@ const getFaltantes = async (req, res) => {
   const veterinaria = req.usuario?.veterinaria || 'donato'
   try {
     const { rows } = await pool.query(
-      `SELECT p.id, p.nombre, p.codigo, p.stock, p.stock_minimo,
-              p.stock_minimo - p.stock AS unidades_faltantes
+      `SELECT p.id, p.nombre, p.codigo, p.categoria, p.stock, p.stock_minimo, - p.stock AS unidades_faltantes
        FROM productos p
        WHERE p.veterinaria = $1
          AND p.activo = TRUE
