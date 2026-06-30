@@ -175,4 +175,42 @@ const getAlertas = async (req, res) => {
   }
 }
 
-module.exports = { getStock, getLotes, agregarLote, getAlertas, darBajaLote }
+const getFaltantes = async (req, res) => {
+  const veterinaria = req.usuario?.veterinaria || 'donato'
+  try {
+    const { rows } = await pool.query(
+      `SELECT p.id, p.nombre, p.codigo, p.stock, p.stock_minimo,
+              p.stock_minimo - p.stock AS unidades_faltantes
+       FROM productos p
+       WHERE p.veterinaria = $1
+         AND p.activo = TRUE
+         AND p.stock_minimo > 0
+         AND p.stock < p.stock_minimo
+       ORDER BY unidades_faltantes DESC`,
+      [veterinaria]
+    )
+    res.json(rows)
+  } catch (err) {
+    console.error('Error getFaltantes:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+}
+
+const actualizarStockMinimo = async (req, res) => {
+  const { id } = req.params
+  const { stock_minimo } = req.body
+  const veterinaria = req.usuario?.veterinaria || 'donato'
+  try {
+    const { rows: [p] } = await pool.query(
+      `UPDATE productos SET stock_minimo = $1
+       WHERE id = $2 AND veterinaria = $3 RETURNING *`,
+      [parseInt(stock_minimo) || 0, id, veterinaria]
+    )
+    if (!p) return res.status(404).json({ error: 'Producto no encontrado' })
+    res.json(p)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+}
+
+module.exports = { getStock, getLotes, agregarLote, getAlertas, darBajaLote, getFaltantes, actualizarStockMinimo }
