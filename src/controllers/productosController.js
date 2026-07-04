@@ -139,6 +139,7 @@ const crearProducto = async (req, res) => {
     droga,
     precio_efectivo,
     edad,
+    mordida,
   } = req.body
 
   const veterinaria = req.usuario.veterinaria || 'donato'
@@ -174,9 +175,10 @@ const crearProducto = async (req, res) => {
   droga,
   precio_efectivo,
   edad,
-  veterinaria
+  veterinaria,
+  mordida
 )
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 RETURNING *
       `,
       [
@@ -194,6 +196,7 @@ RETURNING *
         precio_efectivo || null,
         edad || null,
         veterinaria,
+        mordida || null,
       ]
     )
 
@@ -233,6 +236,7 @@ const actualizarProducto = async (req, res) => {
     droga,
     precio_efectivo,
     edad,
+    mordida,
   } = req.body
 
   if (!nombre || !precio) {
@@ -264,8 +268,9 @@ const actualizarProducto = async (req, res) => {
         etiqueta        = $9,
         droga           = $10,
         precio_efectivo = $11,
-        edad            = $12
-      WHERE id = $13
+        edad            = $12,
+        mordida         = $13
+      WHERE id = $14
       RETURNING *
       `,
       [
@@ -281,6 +286,7 @@ const actualizarProducto = async (req, res) => {
         droga || null,
         precio_efectivo || null,
         edad || null,
+        mordida || null,
         id,
       ]
     )
