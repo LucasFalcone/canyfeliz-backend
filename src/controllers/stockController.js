@@ -12,6 +12,7 @@ const getStock = async (req, res) => {
         p.codigo,
         p.categoria,
         p.stock,
+        p.stock_minimo,
         MIN(l.fecha_venc)
           FILTER (
             WHERE l.cantidad > 0
