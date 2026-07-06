@@ -2,50 +2,35 @@ const pool = require('../db')
 
 const getStock = async (req, res) => {
   const veterinaria = req.usuario?.veterinaria || 'donato'
-
   try {
     const { rows } = await pool.query(
       `SELECT
-        p.id,
-        p.nombre,
-        p.precio,
-        p.codigo,
-        p.categoria,
+        p.id, p.nombre, p.precio, p.codigo,
+        p.categoria, p.stock_minimo,
+        COALESCE(
+          SUM(l.cantidad) FILTER (WHERE l.fecha_venc >= CURRENT_DATE AND l.cantidad > 0),
+          0
+        ) AS stock_real,
         p.stock,
-        p.stock_minimo,
-        MIN(l.fecha_venc)
-          FILTER (
-            WHERE l.cantidad > 0
-              AND l.fecha_venc >= CURRENT_DATE
-          ) AS proximo_venc,
-        COUNT(DISTINCT l.id)
-          FILTER (WHERE l.cantidad > 0) AS cantidad_lotes,
-        SUM(
-          CASE
-            WHEN l.fecha_venc <= CURRENT_DATE + INTERVAL '30 days'
-             AND l.fecha_venc >= CURRENT_DATE
-             AND l.cantidad > 0
-            THEN l.cantidad
-            ELSE 0
-          END
-        ) AS stock_por_vencer,
-        SUM(
-          CASE
-            WHEN l.fecha_venc < CURRENT_DATE
-             AND l.cantidad > 0
-            THEN l.cantidad
-            ELSE 0
-          END
-        ) AS stock_vencido
+        MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0 AND l.fecha_venc >= CURRENT_DATE) AS proximo_venc,
+        COUNT(DISTINCT l.id) FILTER (WHERE l.cantidad > 0) AS cantidad_lotes,
+        SUM(CASE
+          WHEN l.fecha_venc <= CURRENT_DATE + INTERVAL '60 days'
+               AND l.fecha_venc >= CURRENT_DATE
+               AND l.cantidad > 0
+          THEN l.cantidad ELSE 0
+        END) AS stock_por_vencer,
+        SUM(CASE
+          WHEN l.fecha_venc < CURRENT_DATE AND l.cantidad > 0
+          THEN l.cantidad ELSE 0
+        END) AS stock_vencido
        FROM productos p
-       LEFT JOIN lotes l
-         ON l.producto_id = p.id
-       WHERE p.veterinaria = $1
+       LEFT JOIN lotes l ON l.producto_id = p.id
+       WHERE p.veterinaria = $1 AND p.activo = TRUE
        GROUP BY p.id
-       ORDER BY proximo_venc ASC NULLS LAST`,
+       ORDER BY p.nombre ASC`,
       [veterinaria]
     )
-
     res.json(rows)
   } catch (err) {
     console.error('Error getStock:', err.message)
@@ -81,16 +66,25 @@ const agregarLote = async (req, res) => {
   const { cantidad, fecha_venc, numero_lote } = req.body
   const { id: producto_id } = req.params
 
-  if (!cantidad || !fecha_venc)
-    return res.status(400).json({ error: 'Cantidad y fecha de vencimiento requeridas' })
+  const sinVencimiento = fecha_venc === null || fecha_venc === undefined
+
+  if (!cantidad)
+  return res.status(400).json({ error: 'Cantidad requerida' })
 
   try {
     const { rows: [lote] } = await pool.query(
       `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [producto_id, cantidad, fecha_venc, numero_lote || null]
+      [
+        producto_id,
+        cantidad,
+        sinVencimiento ? null : fecha_venc,
+        numero_lote || null
+      ]
     )
+
     res.status(201).json(lote)
+
   } catch (err) {
     console.error('Error agregarLote:', err.message)
     res.status(500).json({ error: err.message })
@@ -128,49 +122,33 @@ const getAlertas = async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT
-  p.id,
-  p.nombre,
-  p.codigo,
-  p.categoria,
-  p.stock,
+        p.id, p.nombre, p.codigo, p.categoria, p.stock,
         MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0) AS proximo_venc,
         SUM(
-          CASE
-            WHEN l.fecha_venc <= CURRENT_DATE + ($1 || ' days')::INTERVAL
-                 AND l.cantidad > 0
-            THEN l.cantidad
-            ELSE 0
-          END
+          CASE WHEN l.fecha_venc <= CURRENT_DATE + ($1 || ' days')::INTERVAL
+                    AND l.fecha_venc >= CURRENT_DATE
+                    AND l.cantidad > 0
+               THEN l.cantidad ELSE 0 END
         ) AS stock_por_vencer,
         SUM(
-          CASE
-            WHEN l.fecha_venc < CURRENT_DATE
-                 AND l.cantidad > 0
-            THEN l.cantidad
-            ELSE 0
-          END
+          CASE WHEN l.fecha_venc < CURRENT_DATE AND l.cantidad > 0
+               THEN l.cantidad ELSE 0 END
         ) AS stock_vencido
        FROM productos p
-       LEFT JOIN lotes l
-         ON l.producto_id = p.id
+       JOIN lotes l ON l.producto_id = p.id   -- JOIN en vez de LEFT JOIN
        WHERE p.veterinaria = $2
+         AND p.activo = TRUE
        GROUP BY p.id, p.nombre, p.codigo, p.categoria, p.stock
        HAVING
-         p.stock = 0
-         OR MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0)
-              <= CURRENT_DATE + ($1 || ' days')::INTERVAL
+         MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0)
+           <= CURRENT_DATE + ($1 || ' days')::INTERVAL
          OR SUM(
-              CASE
-                WHEN l.fecha_venc < CURRENT_DATE
-                     AND l.cantidad > 0
-                THEN l.cantidad
-                ELSE 0
-              END
+              CASE WHEN l.fecha_venc < CURRENT_DATE AND l.cantidad > 0
+                   THEN l.cantidad ELSE 0 END
             ) > 0
        ORDER BY proximo_venc ASC NULLS LAST`,
       [dias, veterinaria]
     )
-
     res.json(rows)
   } catch (err) {
     console.error('Error getAlertas:', err.message)
