@@ -2,35 +2,71 @@ const pool = require('../db')
 
 const getStock = async (req, res) => {
   const veterinaria = req.usuario?.veterinaria || 'donato'
+
   try {
     const { rows } = await pool.query(
       `SELECT
-        p.id, p.nombre, p.precio, p.codigo,
-        p.categoria, p.stock_minimo,
+        p.id,
+        p.nombre,
+        p.precio,
+        p.codigo,
+        p.categoria,
+        p.stock_minimo,
+
+        -- STOCK REAL (incluye lotes sin vencimiento o vigentes)
         COALESCE(
-          SUM(l.cantidad) FILTER (WHERE l.fecha_venc >= CURRENT_DATE AND l.cantidad > 0),
-          0
-        ) AS stock_real,
-        p.stock,
-        MIN(l.fecha_venc) FILTER (WHERE l.cantidad > 0 AND l.fecha_venc >= CURRENT_DATE) AS proximo_venc,
-        COUNT(DISTINCT l.id) FILTER (WHERE l.cantidad > 0) AS cantidad_lotes,
-        SUM(CASE
-          WHEN l.fecha_venc <= CURRENT_DATE + INTERVAL '60 days'
-               AND l.fecha_venc >= CURRENT_DATE
-               AND l.cantidad > 0
-          THEN l.cantidad ELSE 0
-        END) AS stock_por_vencer,
-        SUM(CASE
-          WHEN l.fecha_venc < CURRENT_DATE AND l.cantidad > 0
-          THEN l.cantidad ELSE 0
-        END) AS stock_vencido
-       FROM productos p
-       LEFT JOIN lotes l ON l.producto_id = p.id
-       WHERE p.veterinaria = $1 AND p.activo = TRUE
-       GROUP BY p.id
-       ORDER BY p.nombre ASC`,
+          SUM(
+            CASE
+              WHEN l.cantidad > 0 THEN l.cantidad
+              ELSE 0
+            END
+          ), 0
+        ) AS stock,
+
+        -- Próximo vencimiento válido
+        MIN(l.fecha_venc) FILTER (
+          WHERE l.cantidad > 0
+            AND l.fecha_venc IS NOT NULL
+            AND l.fecha_venc >= CURRENT_DATE
+        ) AS proximo_venc,
+
+        -- cantidad de lotes activos
+        COUNT(l.id) FILTER (WHERE l.cantidad > 0) AS cantidad_lotes,
+
+        -- por vencer (60 días)
+        SUM(
+          CASE
+            WHEN l.fecha_venc IS NOT NULL
+              AND l.fecha_venc <= CURRENT_DATE + INTERVAL '60 days'
+              AND l.fecha_venc >= CURRENT_DATE
+              AND l.cantidad > 0
+            THEN l.cantidad
+            ELSE 0
+          END
+        ) AS stock_por_vencer,
+
+        -- vencidos
+        SUM(
+          CASE
+            WHEN l.fecha_venc IS NOT NULL
+              AND l.fecha_venc < CURRENT_DATE
+              AND l.cantidad > 0
+            THEN l.cantidad
+            ELSE 0
+          END
+        ) AS stock_vencido
+
+      FROM productos p
+      LEFT JOIN lotes l ON l.producto_id = p.id
+
+      WHERE p.veterinaria = $1
+        AND p.activo = TRUE
+
+      GROUP BY p.id
+      ORDER BY p.nombre ASC`,
       [veterinaria]
     )
+
     res.json(rows)
   } catch (err) {
     console.error('Error getStock:', err.message)
@@ -43,19 +79,17 @@ const getLotes = async (req, res) => {
     const { rows } = await pool.query(
       `SELECT *,
         CASE
+          WHEN fecha_venc IS NULL                               THEN 'sin_vencimiento'
           WHEN fecha_venc < CURRENT_DATE                        THEN 'vencido'
           WHEN fecha_venc <= CURRENT_DATE + INTERVAL '30 days' THEN 'por_vencer'
           ELSE 'ok'
         END AS estado
        FROM lotes
        WHERE producto_id = $1
-       AND cantidad > 0
-       ORDER BY fecha_venc ASC`,
+       ORDER BY fecha_venc ASC NULLS LAST`,
       [req.params.id]
     )
-
     res.json(rows)
-
   } catch (err) {
     console.error('Error getLotes:', err.message)
     res.status(500).json({ error: err.message })
@@ -65,20 +99,28 @@ const getLotes = async (req, res) => {
 const agregarLote = async (req, res) => {
   const { cantidad, fecha_venc, numero_lote } = req.body
   const { id: producto_id } = req.params
+  
 
-  const sinVencimiento = fecha_venc === null || fecha_venc === undefined
+  const cant = Number(cantidad)
 
-  if (!cantidad)
-  return res.status(400).json({ error: 'Cantidad requerida' })
+  if (!cant || cant <= 0) {
+    return res.status(400).json({ error: 'Cantidad inválida' })
+  }
+
+  const fechaFinal =
+    !fecha_venc || fecha_venc === '' || fecha_venc === 'null'
+      ? null
+      : fecha_venc
 
   try {
     const { rows: [lote] } = await pool.query(
       `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
       [
         producto_id,
-        cantidad,
-        sinVencimiento ? null : fecha_venc,
+        cant,
+        fechaFinal,
         numero_lote || null
       ]
     )
@@ -86,7 +128,7 @@ const agregarLote = async (req, res) => {
     res.status(201).json(lote)
 
   } catch (err) {
-    console.error('Error agregarLote:', err.message)
+    console.error('Error agregarLote FULL:', err) // 👈 clave
     res.status(500).json({ error: err.message })
   }
 }
