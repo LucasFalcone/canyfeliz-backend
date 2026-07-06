@@ -86,6 +86,7 @@ const getLotes = async (req, res) => {
         END AS estado
        FROM lotes
        WHERE producto_id = $1
+         AND cantidad > 0        -- ← esto hace que desaparezcan los dados de baja
        ORDER BY fecha_venc ASC NULLS LAST`,
       [req.params.id]
     )
