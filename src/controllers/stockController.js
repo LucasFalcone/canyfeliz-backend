@@ -11,7 +11,8 @@ const getStock = async (req, res) => {
         p.precio,
         p.codigo,
         p.categoria,
-        p.stock_minimo,
+        p.stock_minimo,  
+        p.imagen_url, 
 
         -- STOCK REAL (incluye lotes sin vencimiento o vigentes)
         COALESCE(
