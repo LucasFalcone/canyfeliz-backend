@@ -48,7 +48,18 @@ const buscarProductos = async (req, res) => {
             THEN l.cantidad
             ELSE 0
           END
-        ) AS stock_por_vencer
+        ) AS stock_por_vencer,
+
+        -- Cantidad ya vencida (para avisar antes de vender)
+        SUM(
+          CASE
+            WHEN l.fecha_venc IS NOT NULL
+              AND l.fecha_venc < CURRENT_DATE
+              AND l.cantidad > 0
+            THEN l.cantidad
+            ELSE 0
+          END
+        ) AS stock_vencido
 
       FROM productos p
       LEFT JOIN lotes l ON l.producto_id = p.id
