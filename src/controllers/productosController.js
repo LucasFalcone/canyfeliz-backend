@@ -66,6 +66,7 @@ const buscarProductos = async (req, res) => {
         AND (
           codigo = $${params.length - 1}
           OR nombre ILIKE $${params.length}
+          OR REPLACE(subcategoria, '_', ' ') ILIKE $${params.length}
         )
       `
     }
