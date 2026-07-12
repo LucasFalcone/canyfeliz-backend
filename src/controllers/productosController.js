@@ -536,6 +536,7 @@ const eliminarImagen = async (req, res) => {
   }
 }
 
+
 module.exports = {
   buscarProductos,
   listarProductos,
