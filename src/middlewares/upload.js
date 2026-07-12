@@ -1,18 +1,9 @@
 const multer = require('multer')
-const path   = require('path')
-const fs     = require('fs')
 
-const dir = path.join(__dirname, '../uploads/productos')
-if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, dir),
-  filename:    (req, file, cb) => {
-    const ext  = path.extname(file.originalname)
-    const name = `producto_${req.params.id}_${Date.now()}${ext}`
-    cb(null, name)
-  },
-})
+// memoryStorage: el archivo queda disponible como buffer en req.file.buffer,
+// listo para subir a Supabase Storage. No se escribe nada en el disco del
+// servidor (Railway tiene el filesystem efímero: se borra en cada redeploy).
+const storage = multer.memoryStorage()
 
 const upload = multer({
   storage,

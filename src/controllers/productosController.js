@@ -1,6 +1,10 @@
 const pool = require('../db')
 const path = require('path')
-const fs = require('fs')
+const supabase = require('../supabase')
+
+// Nombre del bucket de Supabase Storage donde se guardan las fotos de producto.
+// Ajustá este valor si en tu proyecto de Supabase el bucket se llama distinto.
+const BUCKET = 'productos'
 
 const CATEGORIAS = [
   'balanceado',
@@ -409,6 +413,17 @@ const darBajaLote = async (req, res) => {
   }
 }
 
+// Extrae el "path" interno del bucket a partir de una URL pública de Supabase Storage.
+// Ej: https://xxxx.supabase.co/storage/v1/object/public/productos/producto_5_123.jpg
+//     -> producto_5_123.jpg
+function pathDesdeUrl(url) {
+  if (!url) return null
+  const marcador = `/storage/v1/object/public/${BUCKET}/`
+  const idx = url.indexOf(marcador)
+  if (idx === -1) return null
+  return url.slice(idx + marcador.length)
+}
+
 // POST /productos/:id/imagen
 const subirImagen = async (req, res) => {
   const { id } = req.params
@@ -418,8 +433,6 @@ const subirImagen = async (req, res) => {
       error: 'No se recibió ninguna imagen',
     })
   }
-
-  const imagen_url = `/uploads/productos/${req.file.filename}`
 
   try {
     const {
@@ -433,17 +446,31 @@ const subirImagen = async (req, res) => {
       [id]
     )
 
-    if (prod?.imagen_url) {
-      const oldPath = path.join(
-        __dirname,
-        '../..',
-        prod.imagen_url
-      )
-
-      if (fs.existsSync(oldPath)) {
-        fs.unlinkSync(oldPath)
-      }
+    // Si ya tenía una foto, la borramos de Supabase Storage antes de subir la nueva
+    const pathAnterior = pathDesdeUrl(prod?.imagen_url)
+    if (pathAnterior) {
+      await supabase.storage.from(BUCKET).remove([pathAnterior])
     }
+
+    const ext = path.extname(req.file.originalname) || '.jpg'
+    const nombreArchivo = `producto_${id}_${Date.now()}${ext}`
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(nombreArchivo, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false,
+      })
+
+    if (uploadError) {
+      return res.status(500).json({
+        error: `Error al subir la imagen a Supabase: ${uploadError.message}`,
+      })
+    }
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from(BUCKET).getPublicUrl(nombreArchivo)
 
     const {
       rows: [producto],
@@ -454,12 +481,14 @@ const subirImagen = async (req, res) => {
       WHERE id = $2
       RETURNING *
       `,
-      [imagen_url, id]
+      [publicUrl, id]
     )
 
     res.json(producto)
 
   } catch (err) {
+    console.error('Error subirImagen:', err.message)
+
     res.status(500).json({
       error: err.message,
     })
@@ -482,16 +511,9 @@ const eliminarImagen = async (req, res) => {
       [id]
     )
 
-    if (prod?.imagen_url) {
-      const filePath = path.join(
-        __dirname,
-        '../..',
-        prod.imagen_url
-      )
-
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath)
-      }
+    const pathArchivo = pathDesdeUrl(prod?.imagen_url)
+    if (pathArchivo) {
+      await supabase.storage.from(BUCKET).remove([pathArchivo])
     }
 
     await pool.query(
