@@ -28,10 +28,32 @@ const buscarProductos = async (req, res) => {
 
   try {
     let query = `
-      SELECT *
-      FROM productos
-      WHERE activo = TRUE
-        AND veterinaria = $1
+      SELECT
+        p.*,
+
+        -- Próximo vencimiento válido (igual criterio que en getStock)
+        MIN(l.fecha_venc) FILTER (
+          WHERE l.cantidad > 0
+            AND l.fecha_venc IS NOT NULL
+            AND l.fecha_venc >= CURRENT_DATE
+        ) AS proximo_venc,
+
+        -- Cantidad que vence dentro de los próximos 60 días
+        SUM(
+          CASE
+            WHEN l.fecha_venc IS NOT NULL
+              AND l.fecha_venc <= CURRENT_DATE + INTERVAL '60 days'
+              AND l.fecha_venc >= CURRENT_DATE
+              AND l.cantidad > 0
+            THEN l.cantidad
+            ELSE 0
+          END
+        ) AS stock_por_vencer
+
+      FROM productos p
+      LEFT JOIN lotes l ON l.producto_id = p.id
+      WHERE p.activo = TRUE
+        AND p.veterinaria = $1
     `
 
     const params = [veterinaria]
@@ -40,7 +62,7 @@ const buscarProductos = async (req, res) => {
       params.push(categoria)
 
       query += `
-        AND categoria = $${params.length}
+        AND p.categoria = $${params.length}
       `
     }
 
@@ -48,7 +70,7 @@ const buscarProductos = async (req, res) => {
       params.push(subcategoria)
 
       query += `
-        AND subcategoria = $${params.length}
+        AND p.subcategoria = $${params.length}
       `
     }
 
@@ -56,7 +78,7 @@ const buscarProductos = async (req, res) => {
       params.push(etiqueta)
 
       query += `
-        AND etiqueta = $${params.length}
+        AND p.etiqueta = $${params.length}
       `
     }
 
@@ -68,17 +90,18 @@ const buscarProductos = async (req, res) => {
 
       query += `
         AND (
-          codigo = $${params.length - 1}
-          OR nombre ILIKE $${params.length}
-          OR REPLACE(subcategoria, '_', ' ') ILIKE $${params.length}
-          OR etiqueta ILIKE $${params.length}
-          OR droga ILIKE $${params.length}
+          p.codigo = $${params.length - 1}
+          OR p.nombre ILIKE $${params.length}
+          OR REPLACE(p.subcategoria, '_', ' ') ILIKE $${params.length}
+          OR p.etiqueta ILIKE $${params.length}
+          OR p.droga ILIKE $${params.length}
         )
       `
     }
 
     query += `
-      ORDER BY nombre
+      GROUP BY p.id
+      ORDER BY p.nombre
       LIMIT 50
     `
 
