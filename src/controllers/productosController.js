@@ -59,7 +59,19 @@ const buscarProductos = async (req, res) => {
             THEN l.cantidad
             ELSE 0
           END
-        ) AS stock_vencido
+        ) AS stock_vencido,
+
+        -- Stock real (suma de todos los lotes con cantidad > 0), igual
+        -- criterio que en getStock. Pisa la columna estática productos.stock
+        -- que nunca se actualiza sola tras una venta.
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.cantidad > 0 THEN l.cantidad
+              ELSE 0
+            END
+          ), 0
+        ) AS stock
 
       FROM productos p
       LEFT JOIN lotes l ON l.producto_id = p.id
