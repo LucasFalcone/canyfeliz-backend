@@ -107,13 +107,12 @@ const buscarProductos = async (req, res) => {
 
     if (q && q.trim()) {
       params.push(
-        q.trim(),
         `%${q.trim()}%`
       )
 
       query += `
         AND (
-          p.codigo = $${params.length - 1}
+          p.codigo ILIKE $${params.length}
           OR p.nombre ILIKE $${params.length}
           OR REPLACE(p.subcategoria, '_', ' ') ILIKE $${params.length}
           OR p.etiqueta ILIKE $${params.length}
