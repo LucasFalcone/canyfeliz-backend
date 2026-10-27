@@ -81,12 +81,15 @@ const crearVenta = async (req, res) => {
       let restante = cantidad
       const { rows: lotes } = await client.query(
         `SELECT id, cantidad, fecha_venc, numero_lote
-         FROM lotes
-         WHERE producto_id = $1
-           AND cantidad > 0
-           AND fecha_venc >= CURRENT_DATE
-         ORDER BY fecha_venc ASC
-         FOR UPDATE`,
+FROM lotes
+WHERE producto_id = $1
+  AND cantidad > 0
+  AND (
+    fecha_venc IS NULL
+    OR fecha_venc >= CURRENT_DATE
+  )
+ORDER BY fecha_venc ASC NULLS LAST
+FOR UPDATE`,
         [producto_id]
       )
 
