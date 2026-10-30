@@ -137,27 +137,78 @@ const agregarLote = async (req, res) => {
 
 const darBajaLote = async (req, res) => {
   const { id, lote_id } = req.params
-  const { motivo } = req.body
+  const { motivo, cantidad } = req.body
+
+  // cantidad es opcional: sin cantidad se da de baja el lote entero (como antes);
+  // con cantidad se descuentan solo esas unidades y el resto queda en el lote.
+  const sinCantidad = cantidad === undefined || cantidad === null || cantidad === ''
+  const cant = sinCantidad ? null : Number(cantidad)
+
+  if (!sinCantidad && (!Number.isFinite(cant) || cant <= 0)) {
+    return res.status(400).json({ error: 'Cantidad inválida' })
+  }
 
   try {
-    const { rows: [lote] } = await pool.query(
-      `UPDATE lotes SET cantidad = 0
-       WHERE id = $1 AND producto_id = $2
-       RETURNING *`,
+    const { rows: [actual] } = await pool.query(
+      `SELECT cantidad FROM lotes WHERE id = $1 AND producto_id = $2`,
       [lote_id, id]
     )
 
-    if (!lote)
+    if (!actual)
       return res.status(404).json({ error: 'Lote no encontrado' })
 
-    res.json({ mensaje: `Lote dado de baja. Motivo: ${motivo || 'manual'}`, lote })
+    if (!sinCantidad && cant > Number(actual.cantidad)) {
+      return res.status(400).json({ error: `El lote solo tiene ${actual.cantidad} unidades` })
+    }
+
+    const { rows: [lote] } = await pool.query(
+      `UPDATE lotes
+       SET cantidad = CASE WHEN $3::numeric IS NULL THEN 0 ELSE cantidad - $3::numeric END
+       WHERE id = $1 AND producto_id = $2
+       RETURNING *`,
+      [lote_id, id, cant]
+    )
+
+    res.json({
+      mensaje: sinCantidad
+        ? `Lote dado de baja. Motivo: ${motivo || 'manual'}`
+        : `Baja de ${cant} unidad(es). Motivo: ${motivo || 'manual'}`,
+      lote
+    })
   } catch (err) {
     console.error('Error darBajaLote:', err.message)
     res.status(500).json({ error: err.message })
   }
 }
 
+// Cambia la fecha de vencimiento de un lote (null = sin vencimiento)
+const editarLote = async (req, res) => {
+  const { id, lote_id } = req.params
+  const { fecha_venc } = req.body
 
+  const fecha =
+    !fecha_venc || fecha_venc === '' || fecha_venc === 'null' ? null : String(fecha_venc).slice(0, 10)
+
+  if (fecha !== null && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    return res.status(400).json({ error: 'Fecha inválida' })
+  }
+
+  try {
+    const { rows: [lote] } = await pool.query(
+      `UPDATE lotes SET fecha_venc = $3
+       WHERE id = $1 AND producto_id = $2
+       RETURNING *`,
+      [lote_id, id, fecha]
+    )
+
+    if (!lote) return res.status(404).json({ error: 'Lote no encontrado' })
+
+    res.json(lote)
+  } catch (err) {
+    console.error('Error editarLote:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+}
 
 const getAlertas = async (req, res) => {
   const dias = parseInt(req.query.dias) || 30
@@ -237,4 +288,4 @@ const actualizarStockMinimo = async (req, res) => {
   }
 }
 
-module.exports = { getStock, getLotes, agregarLote, getAlertas, darBajaLote, getFaltantes, actualizarStockMinimo }
+module.exports = { getStock, getLotes, agregarLote, getAlertas, darBajaLote, editarLote, getFaltantes, actualizarStockMinimo }
