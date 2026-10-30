@@ -1,5 +1,25 @@
 const pool = require('../db')
 
+// Producto "comodín" por veterinaria para las ventas de ítems escritos a mano.
+// Es un servicio (no maneja stock) e inactivo, así no aparece en el POS ni en stock.
+const productoManualId = async (client, veterinaria) => {
+  const { rows: [existente] } = await client.query(
+    `SELECT id FROM productos
+     WHERE veterinaria = $1 AND nombre = 'Ítem manual' AND es_servicio = TRUE
+     LIMIT 1`,
+    [veterinaria]
+  )
+  if (existente) return existente.id
+
+  const { rows: [nuevo] } = await client.query(
+    `INSERT INTO productos (nombre, precio, categoria, veterinaria, es_servicio, activo)
+     VALUES ('Ítem manual', 0, 'sin_categoria', $1, TRUE, FALSE)
+     RETURNING id`,
+    [veterinaria]
+  )
+  return nuevo.id
+}
+
 const crearVenta = async (req, res) => {
   const {
     items,
@@ -62,7 +82,23 @@ const crearVenta = async (req, res) => {
     const itemsConLotes = []
 
     for (const item of items) {
-      const { producto_id, cantidad, precio_unit } = item
+      const { producto_id, cantidad, precio_unit, nombre_manual } = item
+
+      // Ítem escrito a mano: no descuenta stock, guarda el nombre que se escribió
+      if (!producto_id && nombre_manual) {
+        const nombre = String(nombre_manual).trim().slice(0, 120)
+        if (!nombre || !(Number(cantidad) > 0) || !(Number(precio_unit) >= 0)) {
+          throw new Error('Ítem manual inválido')
+        }
+        const manualId = await productoManualId(client, veterinaria)
+        await client.query(
+          `INSERT INTO venta_items (venta_id, producto_id, cantidad, precio_unit, nombre_manual)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [venta.id, manualId, cantidad, precio_unit, nombre]
+        )
+        itemsConLotes.push({ producto_id: manualId, nombre, cantidad, precio_unit, lotes: [] })
+        continue
+      }
 
       const { rows: [prod] } = await client.query(
         'SELECT es_servicio FROM productos WHERE id = $1', [producto_id]
@@ -147,7 +183,7 @@ const obtenerVentas = async (req, res) => {
         f.estado AS factura_estado,
         json_agg(
           json_build_object(
-            'nombre', p.nombre,
+            'nombre', COALESCE(vi.nombre_manual, p.nombre),
             'cantidad', vi.cantidad,
             'precio_unit', vi.precio_unit
           )
