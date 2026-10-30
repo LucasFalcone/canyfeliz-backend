@@ -183,10 +183,12 @@ const darBajaLote = async (req, res) => {
   }
 }
 
-// Cambia la fecha de vencimiento de un lote (null = sin vencimiento)
+// Cambia la fecha de vencimiento de un lote (null = sin vencimiento).
+// Si viene `cantidad` menor a la del lote, solo esas unidades pasan a la nueva fecha:
+// se descuentan del lote original y se crea un lote nuevo con ellas.
 const editarLote = async (req, res) => {
   const { id, lote_id } = req.params
-  const { fecha_venc } = req.body
+  const { fecha_venc, cantidad } = req.body
 
   const fecha =
     !fecha_venc || fecha_venc === '' || fecha_venc === 'null' ? null : String(fecha_venc).slice(0, 10)
@@ -195,20 +197,55 @@ const editarLote = async (req, res) => {
     return res.status(400).json({ error: 'Fecha inválida' })
   }
 
+  const hayCantidad = cantidad !== undefined && cantidad !== null && cantidad !== ''
+  const cant = hayCantidad ? Number(cantidad) : null
+  if (hayCantidad && (!Number.isFinite(cant) || cant <= 0)) {
+    return res.status(400).json({ error: 'Cantidad inválida' })
+  }
+
+  const client = await pool.connect()
   try {
-    const { rows: [lote] } = await pool.query(
-      `UPDATE lotes SET fecha_venc = $3
-       WHERE id = $1 AND producto_id = $2
-       RETURNING *`,
-      [lote_id, id, fecha]
+    await client.query('BEGIN')
+
+    const { rows: [actual] } = await client.query(
+      `SELECT * FROM lotes WHERE id = $1 AND producto_id = $2 FOR UPDATE`,
+      [lote_id, id]
     )
+    if (!actual) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Lote no encontrado' })
+    }
 
-    if (!lote) return res.status(404).json({ error: 'Lote no encontrado' })
+    let lote
+    if (hayCantidad && cant < Number(actual.cantidad)) {
+      // separar unidades en un lote nuevo
+      await client.query(
+        `UPDATE lotes SET cantidad = cantidad - $2 WHERE id = $1`,
+        [lote_id, cant]
+      )
+      ;({ rows: [lote] } = await client.query(
+        `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [id, cant, fecha, actual.numero_lote]
+      ))
+    } else {
+      ;({ rows: [lote] } = await client.query(
+        `UPDATE lotes SET fecha_venc = $3
+         WHERE id = $1 AND producto_id = $2
+         RETURNING *`,
+        [lote_id, id, fecha]
+      ))
+    }
 
+    await client.query('COMMIT')
     res.json(lote)
   } catch (err) {
+    await client.query('ROLLBACK')
     console.error('Error editarLote:', err.message)
     res.status(500).json({ error: err.message })
+  } finally {
+    client.release()
   }
 }
 
