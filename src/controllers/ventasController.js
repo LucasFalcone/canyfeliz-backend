@@ -157,6 +157,22 @@ FOR UPDATE`,
          VALUES ($1, $2, $3, $4)`,
         [venta.id, producto_id, cantidad, precio_unit]
       )
+
+      // Guardar de qué lotes salió cada unidad (para poder devolverlas con su vencimiento)
+      await client.query('SAVEPOINT sp_venta_lotes')
+      try {
+        for (const l of lotesUsados) {
+          await client.query(
+            `INSERT INTO venta_lotes (venta_id, producto_id, cantidad, fecha_venc, numero_lote)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [venta.id, producto_id, l.cantidad, l.fecha_venc, l.numero_lote]
+          )
+        }
+        await client.query('RELEASE SAVEPOINT sp_venta_lotes')
+      } catch (e) {
+        // tabla todavía no creada: la venta sigue igual, solo no queda registro del lote
+        await client.query('ROLLBACK TO SAVEPOINT sp_venta_lotes')
+      }
       itemsConLotes.push({ producto_id, cantidad, precio_unit, lotes: lotesUsados })
     }
 
@@ -236,12 +252,35 @@ const eliminarVentas = async (req, res) => {
        GROUP BY vi.producto_id`,
       [ids]
     )
+    const { rows: [tl] } = await client.query("SELECT to_regclass('public.venta_lotes') AS vl")
+    const usados = tl.vl
+      ? (await client.query(
+          'SELECT producto_id, cantidad, fecha_venc, numero_lote FROM venta_lotes WHERE venta_id = ANY($1)',
+          [ids]
+        )).rows
+      : []
+
     for (const it of items) {
-      await client.query(
-        `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
-         VALUES ($1, $2, NULL, $3)`,
-        [it.producto_id, it.cantidad, 'DEVOLUCION']
-      )
+      let resto = it.cantidad
+      // Primero: devolver cada unidad a su lote/vencimiento original
+      for (const u of usados.filter(x => x.producto_id === it.producto_id)) {
+        const c = Math.min(u.cantidad, resto)
+        if (c <= 0) continue
+        await client.query(
+          `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
+           VALUES ($1, $2, $3, $4)`,
+          [it.producto_id, c, u.fecha_venc, u.numero_lote]
+        )
+        resto -= c
+      }
+      // Lo que no tiene lote registrado (ventas viejas) vuelve sin vencimiento
+      if (resto > 0) {
+        await client.query(
+          `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
+           VALUES ($1, $2, NULL, $3)`,
+          [it.producto_id, resto, 'DEVOLUCION']
+        )
+      }
     }
 
     // Facturación asociada (si existe)
@@ -256,6 +295,7 @@ const eliminarVentas = async (req, res) => {
     }
     if (t.f) await client.query('DELETE FROM facturas WHERE venta_id = ANY($1)', [ids])
 
+    if (tl.vl) await client.query('DELETE FROM venta_lotes WHERE venta_id = ANY($1)', [ids])
     await client.query('DELETE FROM venta_pagos WHERE venta_id = ANY($1)', [ids])
     await client.query('DELETE FROM venta_items WHERE venta_id = ANY($1)', [ids])
     await client.query('DELETE FROM ventas WHERE id = ANY($1)', [ids])
