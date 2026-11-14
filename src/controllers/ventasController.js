@@ -208,4 +208,67 @@ const obtenerVentas = async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 }
-module.exports = { crearVenta, obtenerVentas }
+
+// Elimina ventas: devuelve el stock (como lote nuevo sin vencimiento) y borra todo lo asociado.
+const eliminarVentas = async (req, res) => {
+  const veterinaria = req.usuario?.veterinaria || 'donato'
+  const ids = [...new Set((req.body?.ids || []).map(Number).filter(Number.isInteger))]
+  if (ids.length === 0) return res.status(400).json({ error: 'No se indicaron ventas' })
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows: ventas } = await client.query(
+      'SELECT id FROM ventas WHERE id = ANY($1) AND veterinaria = $2 FOR UPDATE',
+      [ids, veterinaria]
+    )
+    if (ventas.length !== ids.length) throw new Error('Alguna venta no existe o no es de esta veterinaria')
+
+    // Devolver stock (ítems manuales y servicios no tienen stock)
+    const { rows: items } = await client.query(
+      `SELECT vi.producto_id, SUM(vi.cantidad)::int AS cantidad
+       FROM venta_items vi
+       JOIN productos p ON p.id = vi.producto_id
+       WHERE vi.venta_id = ANY($1)
+         AND vi.nombre_manual IS NULL
+         AND COALESCE(p.es_servicio, FALSE) = FALSE
+       GROUP BY vi.producto_id`,
+      [ids]
+    )
+    for (const it of items) {
+      await client.query(
+        `INSERT INTO lotes (producto_id, cantidad, fecha_venc, numero_lote)
+         VALUES ($1, $2, NULL, $3)`,
+        [it.producto_id, it.cantidad, 'DEVOLUCION']
+      )
+    }
+
+    // Facturación asociada (si existe)
+    const { rows: [t] } = await client.query(
+      "SELECT to_regclass('public.notas_credito') AS nc, to_regclass('public.facturas') AS f"
+    )
+    if (t.nc && t.f) {
+      await client.query(
+        'DELETE FROM notas_credito WHERE venta_id = ANY($1) OR factura_id IN (SELECT id FROM facturas WHERE venta_id = ANY($1))',
+        [ids]
+      )
+    }
+    if (t.f) await client.query('DELETE FROM facturas WHERE venta_id = ANY($1)', [ids])
+
+    await client.query('DELETE FROM venta_pagos WHERE venta_id = ANY($1)', [ids])
+    await client.query('DELETE FROM venta_items WHERE venta_id = ANY($1)', [ids])
+    await client.query('DELETE FROM ventas WHERE id = ANY($1)', [ids])
+
+    await client.query('COMMIT')
+    res.json({ eliminadas: ids.length })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    console.error('Error al eliminar ventas:', err)
+    res.status(400).json({ error: err.message || 'No se pudieron eliminar las ventas' })
+  } finally {
+    client.release()
+  }
+}
+
+module.exports = { crearVenta, obtenerVentas, eliminarVentas }
